@@ -11,8 +11,24 @@ endpoints = {}
 requests = {}
 caches = {}
 
-datafile = "me_at_the_zoo"
+datafile = "videos_worth_spreading"
 
+def get_or_create_cache(attrs, caches)
+  cache = caches[attrs[:index]]
+  return cache if cache
+  c = Base::Cache.new({index: attrs[:index], capacity: attrs[:capacity]})
+  caches[attrs[:index]] = c
+  return c
+end
+
+def get_or_create_endpoint(attrs, endpoints)
+  endpoint = endpoints[attrs[:index]]
+  return endpoint if endpoint
+  # e = Base::Cache.new({index: attrs[:index], capacity: attrs[:capacity]})
+  e = Base::Endpoint.new({index: attrs[:index], dc_latency: attrs[:dc_latency]})
+  endpoints[attrs[:index]] = e
+  return e
+end
 
 File.open("#{datafile}.in", 'r') do |f|  
   stats_row = f.gets.split(' ')
@@ -30,15 +46,14 @@ File.open("#{datafile}.in", 'r') do |f|
 
   for i in 0..endpoint_count-1
     endpoint_row = f.gets.split(' ')
-    
-    caches_count = endpoint_row[1].to_i 
-    endpoint = Base::Endpoint.new({index: i, dc_latency: endpoint_row[0].to_i})
+
+    caches_count = endpoint_row[1].to_i
+    endpoint = get_or_create_endpoint({index: i, dc_latency: endpoint_row[0].to_i}, endpoints)
     endpoints[i] = endpoint
 
     for i in 0..caches_count-1
       cache_latency_row = f.gets.split(' ')
-      cache = Base::Cache.new({index: cache_latency_row[0].to_i, capacity: cache_capacity})
-      caches[i] = cache
+      cache = get_or_create_cache({index: cache_latency_row[0].to_i, capacity: cache_capacity}, caches)
       endpoint.add_cache(cache_latency_row[1].to_i, cache)
     end
   end
@@ -51,31 +66,58 @@ File.open("#{datafile}.in", 'r') do |f|
       video: videos[request_row[0].to_i]
     })
   end
-end  
+end
 
-requests.each do |i,r|
+# sort requests by popularity and size
+requests = requests.values.sort! do |a,b|
+  relevancea = a.requests.to_f ** 10 / ((a.video.size.to_f)  + a.avg_cache_latency)
+  relevanceb = b.requests.to_f ** 10 / ((b.video.size.to_f) + a.avg_cache_latency)
+  relevancea <=> relevanceb
+end
+
+# requests.each do |r|
+#   puts r.endpoint.caches()
+# end
+requests = requests.reverse
+requests.each do |r|
+
   # puts "#{r.requests} r from endpoint #{r.endpoint.index} for vid #{r.video.index} "
   endpoint_caches = r.endpoint.caches()
-  c_index = endpoint_caches.keys.sort.shift
-  closest_cache = endpoint_caches[c_index]
 
-  if closest_cache
-    closest_cache.add_video(r.video)
-  else
-    puts "\tNo close cache"
+  # contains a list of fastest caches for that endpoint
+  cache_indecies = endpoint_caches.keys.sort
+  while cache_indecies
+    index = cache_indecies.shift
+    if not index
+
+      # puts "Endpoint #{r.endpoint.index} is connected to caches #{r.endpoint.caches.inspect}"
+      # puts "All caches full for endpoint #{r.endpoint.index}"
+      # puts "Trying to fit #{r.video.size} in #{r.endpoint.caches}"
+      break
+    end
+    potential_cache = endpoint_caches[index]
+
+    if potential_cache.add_video(r.video)
+      # puts "video fits"
+      break
+    else
+      # puts "dont fit"
+    end
   end
-  # puts "\n"
+
 end
 
 # write result file
 
 begin
   file = File.open("#{datafile}.out", "w")
-  file.write("#{cache_count}\n")
+  file.write("#{Base::Cache::get_used()}\n")
   # grab cache server
   caches.each do |i,c|
     videos = c.videos.values.map(&:index)
-    file.write("#{[c.index, videos].join(' ')}\n")
+    if videos.any?
+      file.write("#{[c.index, videos].join(' ')}\n")
+    end
   end
 
 rescue IOError => e
